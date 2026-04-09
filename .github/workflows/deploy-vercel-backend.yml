@@ -1,0 +1,40 @@
+name: reusable-backend-deploy-vercel
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node.js version
+        type: string
+        default: '20'
+    secrets:
+      VERCEL_BACKEND_TOKEN:
+        description: Vercel backend deployment token
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel
+
+      - name: Deploy Backend to Vercel
+        run: |
+          vercel deploy --prod --yes \
+            --token=${{ secrets.VERCEL_BACKEND_TOKEN }}
