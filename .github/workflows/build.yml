@@ -4,18 +4,24 @@ on:
   workflow_call:
     inputs:
       node-version:
+        description: Node.js version for application build
         type: string
-        default: '18'
+        default: '20'
       build-folder:
+        description: Build output folder
         type: string
-        default: 'build'
+        default: 'dist'
       artifact-name:
+        description: Name of the uploaded artifact
         type: string
         default: 'react-build'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+     
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout code
