@@ -1,0 +1,40 @@
+name: reusable-react-build
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: '18'
+      build-folder:
+        type: string
+        default: 'build'
+      artifact-name:
+        type: string
+        default: 'react-build'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build React app
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.build-folder }}
