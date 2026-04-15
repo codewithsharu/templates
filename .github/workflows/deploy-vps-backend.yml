@@ -123,33 +123,8 @@ jobs:
             TARGET_PM2_APP_NAME="${{ env.PM2_APP_NAME }}"
             echo "PM2 app name target: ${TARGET_PM2_APP_NAME}"
 
-            PM2_JSON="$(pm2 jlist 2>/dev/null || echo '[]')"
-            STALE_PM2_NAMES="$(node - "$PM2_JSON" "${{ env.BACKEND_DIR }}" "$TARGET_PM2_APP_NAME" <<'NODE'
-const [jsonInput, backendDirInput, targetNameInput] = process.argv.slice(2);
-const normalize = (value) => String(value || "").replace(/\\/g, "/").replace(/\/+$/, "");
-const backendDir = normalize(backendDirInput);
-const targetName = String(targetNameInput || "").trim();
-let apps = [];
-try {
-  apps = JSON.parse(jsonInput);
-} catch {
-  apps = [];
-}
-const staleNames = new Set();
-for (const app of apps) {
-  const env = app?.pm2_env || {};
-  const name = String(env.name || app.name || "").trim();
-  if (!name || name === targetName) {
-    continue;
-  }
-  const cwd = normalize(env.pm_cwd);
-  const execPath = normalize(env.pm_exec_path);
-  if (cwd === backendDir || execPath === `${backendDir}/server.js`) {
-    staleNames.add(name);
-  }
-}
-process.stdout.write(Array.from(staleNames).join("\n"));
-NODE
+            STALE_PM2_NAMES="$(
+              (pm2 jlist 2>/dev/null || echo '[]') | node -e 'const fs=require("fs");const normalize=(v)=>String(v||"").replace(/\\\\/g,"/").replace(/\/+$/,"");const backendDir=normalize(process.argv[1]);const target=String(process.argv[2]||"").trim();let apps=[];try{apps=JSON.parse(fs.readFileSync(0,"utf8")||"[]");}catch{apps=[];}const stale=[...new Set((Array.isArray(apps)?apps:[]).map((app)=>{const env=app?.pm2_env||{};const name=String(env.name||app.name||"").trim();if(!name||name===target)return "";const cwd=normalize(env.pm_cwd);const execPath=normalize(env.pm_exec_path);return (cwd===backendDir||execPath===backendDir+"/server.js")?name:"";}).filter(Boolean))];process.stdout.write(stale.join("\\n"));' "${{ env.BACKEND_DIR }}" "$TARGET_PM2_APP_NAME"
             )"
 
             if [ -n "$STALE_PM2_NAMES" ]; then
