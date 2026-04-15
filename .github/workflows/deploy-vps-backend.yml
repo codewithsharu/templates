@@ -172,8 +172,18 @@ jobs:
               PORT_VALUE=3000
             fi
 
+            HOST_IP_VALUE="$(grep -E '^HOST_IP=' "${{ env.BACKEND_DIR }}/.env" | tail -n1 | cut -d'=' -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+
             API_URL="http://127.0.0.1:${PORT_VALUE}/"
+            PUBLIC_API_URL=""
+            if [ -n "$HOST_IP_VALUE" ]; then
+              PUBLIC_API_URL="http://${HOST_IP_VALUE}:${PORT_VALUE}/"
+            fi
+
             echo "Checking API health at ${API_URL}"
+            if [ -n "$PUBLIC_API_URL" ]; then
+              echo "Public API URL: ${PUBLIC_API_URL}"
+            fi
 
             if ! command -v curl >/dev/null 2>&1; then
               echo "[WARN] curl is not installed on VPS; skipping HTTP health check."
@@ -183,6 +193,9 @@ jobs:
             for i in $(seq 1 20); do
               if curl -fsS --max-time 5 "$API_URL" >/dev/null; then
                 echo "API is healthy at ${API_URL}"
+                if [ -n "$PUBLIC_API_URL" ]; then
+                  echo "Public API should be reachable at ${PUBLIC_API_URL} (subject to firewall/Nginx)."
+                fi
                 exit 0
               fi
               echo "Attempt ${i}/20: API not ready yet, retrying..."
