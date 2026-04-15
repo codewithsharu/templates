@@ -1,1 +1,112 @@
+name: reusable-deploy-vps-backend
 
+on:
+  workflow_call:
+    inputs:
+      app-dir:
+        description: Root app directory on VPS
+        required: false
+        type: string
+        default: /root/wazada
+      backend-dir:
+        description: Backend app directory on VPS
+        required: false
+        type: string
+        default: /root/wazada/Backend
+      pm2-app-name:
+        description: PM2 app name
+        required: false
+        type: string
+        default: wazada-backend
+      source:
+        description: Files/folders to copy from repo
+        required: false
+        type: string
+        default: Backend/**,ecosystem.config.js
+    secrets:
+      VPS_HOST:
+        required: true
+      VPS_USERNAME:
+        required: true
+      VPS_SSH_KEY:
+        required: true
+      BACKEND_ENV_FILE:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      APP_DIR: ${{ inputs.app-dir }}
+      BACKEND_DIR: ${{ inputs.backend-dir }}
+      PM2_APP_NAME: ${{ inputs.pm2-app-name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare VPS directories
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            mkdir -p "${{ env.BACKEND_DIR }}"
+
+      - name: Copy backend files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "${{ inputs.source }}"
+          target: "${{ env.APP_DIR }}"
+          strip_components: 0
+
+      - name: Write backend .env from single secret
+        uses: appleboy/ssh-action@v1
+        env:
+          BACKEND_ENV_FILE: ${{ secrets.BACKEND_ENV_FILE }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: BACKEND_ENV_FILE
+          script: |
+            set -e
+            if [ -z "$BACKEND_ENV_FILE" ]; then
+              echo "BACKEND_ENV_FILE secret is empty or missing."
+              exit 1
+            fi
+            mkdir -p "${{ env.BACKEND_DIR }}"
+            printf "%s\n" "$BACKEND_ENV_FILE" > "${{ env.BACKEND_DIR }}/.env"
+            chmod 600 "${{ env.BACKEND_DIR }}/.env"
+
+      - name: Install dependencies and restart PM2
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            if ! command -v pm2 >/dev/null 2>&1; then
+              npm install -g pm2
+            fi
+
+            cd "${{ env.BACKEND_DIR }}"
+            if [ -f package-lock.json ]; then
+              npm ci --omit=dev
+            else
+              npm install --omit=dev
+            fi
+
+            cd "${{ env.APP_DIR }}"
+            if pm2 describe "${{ env.PM2_APP_NAME }}" >/dev/null 2>&1; then
+              pm2 restart "${{ env.PM2_APP_NAME }}"
+            else
+              pm2 start ecosystem.config.js --only "${{ env.PM2_APP_NAME }}"
+            fi
+            pm2 save
