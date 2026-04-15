@@ -55,6 +55,27 @@ jobs:
           target: "${{ env.APP_DIR }}"
           strip_components: 0
 
+        - name: Verify backend directory and files on VPS
+          uses: appleboy/ssh-action@v1
+          with:
+            host: ${{ secrets.VPS_HOST }}
+            username: ${{ secrets.VPS_USERNAME }}
+            key: ${{ secrets.VPS_SSH_KEY }}
+            script: |
+              set -e
+              echo "--- Directory structure at ${{ env.APP_DIR }} ---"
+              ls -l "${{ env.APP_DIR }}"
+              echo "--- Directory structure at ${{ env.BACKEND_DIR }} ---"
+              ls -l "${{ env.BACKEND_DIR }}"
+              if [ ! -f "${{ env.BACKEND_DIR }}/server.js" ]; then
+                echo "[ERROR] server.js not found in ${{ env.BACKEND_DIR }}."
+                exit 1
+              fi
+              if [ ! -f "${{ env.BACKEND_DIR }}/.env" ]; then
+                echo "[ERROR] .env not found in ${{ env.BACKEND_DIR }}."
+                exit 1
+              fi
+
       - name: Write backend .env from single secret
         uses: appleboy/ssh-action@v1
         env:
