@@ -55,26 +55,22 @@ jobs:
           target: "${{ env.APP_DIR }}"
           strip_components: 0
 
-        - name: Verify backend directory and files on VPS
-          uses: appleboy/ssh-action@v1
-          with:
-            host: ${{ secrets.VPS_HOST }}
-            username: ${{ secrets.VPS_USERNAME }}
-            key: ${{ secrets.VPS_SSH_KEY }}
-            script: |
-              set -e
-              echo "--- Directory structure at ${{ env.APP_DIR }} ---"
-              ls -l "${{ env.APP_DIR }}"
-              echo "--- Directory structure at ${{ env.BACKEND_DIR }} ---"
-              ls -l "${{ env.BACKEND_DIR }}"
-              if [ ! -f "${{ env.BACKEND_DIR }}/server.js" ]; then
-                echo "[ERROR] server.js not found in ${{ env.BACKEND_DIR }}."
-                exit 1
-              fi
-              if [ ! -f "${{ env.BACKEND_DIR }}/.env" ]; then
-                echo "[ERROR] .env not found in ${{ env.BACKEND_DIR }}."
-                exit 1
-              fi
+      - name: Verify backend directory and files on VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            echo "--- Directory structure at ${{ env.APP_DIR }} ---"
+            ls -la "${{ env.APP_DIR }}"
+            echo "--- Directory structure at ${{ env.BACKEND_DIR }} ---"
+            ls -la "${{ env.BACKEND_DIR }}"
+            if [ ! -f "${{ env.BACKEND_DIR }}/server.js" ]; then
+              echo "[ERROR] server.js not found in ${{ env.BACKEND_DIR }}."
+              exit 1
+            fi
 
       - name: Write backend .env from single secret
         uses: appleboy/ssh-action@v1
@@ -94,6 +90,10 @@ jobs:
             mkdir -p "${{ env.BACKEND_DIR }}"
             printf "%s\n" "$BACKEND_ENV_FILE" > "${{ env.BACKEND_DIR }}/.env"
             chmod 600 "${{ env.BACKEND_DIR }}/.env"
+            if [ ! -s "${{ env.BACKEND_DIR }}/.env" ]; then
+              echo "[ERROR] .env file was not written correctly."
+              exit 1
+            fi
 
       - name: Install dependencies and restart PM2
         uses: appleboy/ssh-action@v1
@@ -132,3 +132,39 @@ jobs:
             fi
             pm2 save
             pm2 status
+
+      - name: Verify backend API health on VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+
+            PORT_VALUE="$(grep -E '^PORT=' "${{ env.BACKEND_DIR }}/.env" | tail -n1 | cut -d'=' -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+            if [ -z "$PORT_VALUE" ]; then
+              PORT_VALUE=3000
+            fi
+
+            API_URL="http://127.0.0.1:${PORT_VALUE}/"
+            echo "Checking API health at ${API_URL}"
+
+            if ! command -v curl >/dev/null 2>&1; then
+              echo "[WARN] curl is not installed on VPS; skipping HTTP health check."
+              exit 0
+            fi
+
+            for i in $(seq 1 20); do
+              if curl -fsS --max-time 5 "$API_URL" >/dev/null; then
+                echo "API is healthy at ${API_URL}"
+                exit 0
+              fi
+              echo "Attempt ${i}/20: API not ready yet, retrying..."
+              sleep 2
+            done
+
+            echo "[ERROR] API health check failed at ${API_URL}"
+            pm2 status
+            pm2 logs "${{ env.PM2_APP_NAME }}" --lines 80 --nostream || true
+            exit 1
