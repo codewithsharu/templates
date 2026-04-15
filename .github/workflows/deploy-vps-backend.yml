@@ -120,36 +120,68 @@ jobs:
               npm install --omit=dev
             fi
 
-            RESOLVED_PM2_APP_NAME="${{ env.PM2_APP_NAME }}"
-            if [ -f "${{ env.APP_DIR }}/ecosystem.config.js" ]; then
-              ECOSYSTEM_PM2_APP_NAME="$(node -e "try{const cfg=require(process.argv[1]);const apps=Array.isArray(cfg.apps)?cfg.apps:[cfg.apps];const name=(apps[0]&&apps[0].name)||'';process.stdout.write(name)}catch(e){process.stdout.write('')}" "${{ env.APP_DIR }}/ecosystem.config.js")"
-              if [ -n "$ECOSYSTEM_PM2_APP_NAME" ]; then
-                RESOLVED_PM2_APP_NAME="$ECOSYSTEM_PM2_APP_NAME"
-              fi
+            TARGET_PM2_APP_NAME="${{ env.PM2_APP_NAME }}"
+            echo "PM2 app name target: ${TARGET_PM2_APP_NAME}"
+
+            PM2_JSON="$(pm2 jlist 2>/dev/null || echo '[]')"
+            STALE_PM2_NAMES="$(node - "$PM2_JSON" "${{ env.BACKEND_DIR }}" "$TARGET_PM2_APP_NAME" <<'NODE'
+const [jsonInput, backendDirInput, targetNameInput] = process.argv.slice(2);
+const normalize = (value) => String(value || "").replace(/\\/g, "/").replace(/\/+$/, "");
+const backendDir = normalize(backendDirInput);
+const targetName = String(targetNameInput || "").trim();
+let apps = [];
+try {
+  apps = JSON.parse(jsonInput);
+} catch {
+  apps = [];
+}
+const staleNames = new Set();
+for (const app of apps) {
+  const env = app?.pm2_env || {};
+  const name = String(env.name || app.name || "").trim();
+  if (!name || name === targetName) {
+    continue;
+  }
+  const cwd = normalize(env.pm_cwd);
+  const execPath = normalize(env.pm_exec_path);
+  if (cwd === backendDir || execPath === `${backendDir}/server.js`) {
+    staleNames.add(name);
+  }
+}
+process.stdout.write(Array.from(staleNames).join("\n"));
+NODE
+            )"
+
+            if [ -n "$STALE_PM2_NAMES" ]; then
+              echo "Deleting stale PM2 process names for this backend:"
+              echo "$STALE_PM2_NAMES"
+              while IFS= read -r stale_name; do
+                if [ -n "$stale_name" ]; then
+                  pm2 delete "$stale_name" || true
+                fi
+              done <<< "$STALE_PM2_NAMES"
             fi
 
-            echo "PM2 app name target: ${RESOLVED_PM2_APP_NAME}"
-
-            if pm2 describe "$RESOLVED_PM2_APP_NAME" >/dev/null 2>&1; then
-              pm2 restart "$RESOLVED_PM2_APP_NAME" --update-env
+            if pm2 describe "$TARGET_PM2_APP_NAME" >/dev/null 2>&1; then
+              pm2 restart "$TARGET_PM2_APP_NAME" --update-env
             else
               if [ -f "${{ env.APP_DIR }}/ecosystem.config.js" ]; then
                 cd "${{ env.APP_DIR }}"
-                if ! pm2 start ecosystem.config.js --only "$RESOLVED_PM2_APP_NAME" --update-env; then
-                  pm2 start ecosystem.config.js --update-env
+                if ! pm2 start ecosystem.config.js --only "$TARGET_PM2_APP_NAME" --update-env; then
+                  pm2 start server.js --name "$TARGET_PM2_APP_NAME" --cwd "${{ env.BACKEND_DIR }}" --update-env
                 fi
               else
-                pm2 start server.js --name "$RESOLVED_PM2_APP_NAME" --cwd "${{ env.BACKEND_DIR }}" --update-env
+                pm2 start server.js --name "$TARGET_PM2_APP_NAME" --cwd "${{ env.BACKEND_DIR }}" --update-env
               fi
             fi
 
-            if ! pm2 describe "$RESOLVED_PM2_APP_NAME" >/dev/null 2>&1; then
-              echo "[ERROR] PM2 process ${RESOLVED_PM2_APP_NAME} is not running after deploy."
+            if ! pm2 describe "$TARGET_PM2_APP_NAME" >/dev/null 2>&1; then
+              echo "[ERROR] PM2 process ${TARGET_PM2_APP_NAME} is not running after deploy."
               pm2 status
               exit 1
             fi
 
-            printf "%s\n" "$RESOLVED_PM2_APP_NAME" > "${{ env.APP_DIR }}/.active_pm2_name"
+            printf "%s\n" "$TARGET_PM2_APP_NAME" > "${{ env.APP_DIR }}/.active_pm2_name"
             pm2 save
             pm2 status
 
