@@ -120,16 +120,36 @@ jobs:
               npm install --omit=dev
             fi
 
-            if pm2 describe "${{ env.PM2_APP_NAME }}" >/dev/null 2>&1; then
-              pm2 restart "${{ env.PM2_APP_NAME }}" --update-env
+            RESOLVED_PM2_APP_NAME="${{ env.PM2_APP_NAME }}"
+            if [ -f "${{ env.APP_DIR }}/ecosystem.config.js" ]; then
+              ECOSYSTEM_PM2_APP_NAME="$(node -e "try{const cfg=require(process.argv[1]);const apps=Array.isArray(cfg.apps)?cfg.apps:[cfg.apps];const name=(apps[0]&&apps[0].name)||'';process.stdout.write(name)}catch(e){process.stdout.write('')}" "${{ env.APP_DIR }}/ecosystem.config.js")"
+              if [ -n "$ECOSYSTEM_PM2_APP_NAME" ]; then
+                RESOLVED_PM2_APP_NAME="$ECOSYSTEM_PM2_APP_NAME"
+              fi
+            fi
+
+            echo "PM2 app name target: ${RESOLVED_PM2_APP_NAME}"
+
+            if pm2 describe "$RESOLVED_PM2_APP_NAME" >/dev/null 2>&1; then
+              pm2 restart "$RESOLVED_PM2_APP_NAME" --update-env
             else
               if [ -f "${{ env.APP_DIR }}/ecosystem.config.js" ]; then
                 cd "${{ env.APP_DIR }}"
-                pm2 start ecosystem.config.js --only "${{ env.PM2_APP_NAME }}"
+                if ! pm2 start ecosystem.config.js --only "$RESOLVED_PM2_APP_NAME" --update-env; then
+                  pm2 start ecosystem.config.js --update-env
+                fi
               else
-                pm2 start server.js --name "${{ env.PM2_APP_NAME }}" --cwd "${{ env.BACKEND_DIR }}" --update-env
+                pm2 start server.js --name "$RESOLVED_PM2_APP_NAME" --cwd "${{ env.BACKEND_DIR }}" --update-env
               fi
             fi
+
+            if ! pm2 describe "$RESOLVED_PM2_APP_NAME" >/dev/null 2>&1; then
+              echo "[ERROR] PM2 process ${RESOLVED_PM2_APP_NAME} is not running after deploy."
+              pm2 status
+              exit 1
+            fi
+
+            printf "%s\n" "$RESOLVED_PM2_APP_NAME" > "${{ env.APP_DIR }}/.active_pm2_name"
             pm2 save
             pm2 status
 
@@ -141,6 +161,11 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             set -e
+
+            ACTIVE_PM2_APP_NAME="${{ env.PM2_APP_NAME }}"
+            if [ -f "${{ env.APP_DIR }}/.active_pm2_name" ]; then
+              ACTIVE_PM2_APP_NAME="$(tr -d '\r\n' < "${{ env.APP_DIR }}/.active_pm2_name")"
+            fi
 
             PORT_VALUE="$(grep -E '^PORT=' "${{ env.BACKEND_DIR }}/.env" | tail -n1 | cut -d'=' -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
             if [ -z "$PORT_VALUE" ]; then
@@ -166,5 +191,18 @@ jobs:
 
             echo "[ERROR] API health check failed at ${API_URL}"
             pm2 status
-            pm2 logs "${{ env.PM2_APP_NAME }}" --lines 80 --nostream || true
+            pm2 logs "$ACTIVE_PM2_APP_NAME" --lines 80 --nostream || true
             exit 1
+
+      - name: Add deploy success markdown summary
+        if: ${{ success() }}
+        run: |
+          {
+            echo "## Backend Deploy Pipeline Worked"
+            echo ""
+            echo "- Status: success"
+            echo "- App input: ${{ inputs.app-name }}"
+            echo "- Backend directory: ${{ env.BACKEND_DIR }}"
+            echo "- Marker: backend pipeline worked and API health check passed"
+            echo "- Time: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          } >> "$GITHUB_STEP_SUMMARY"
