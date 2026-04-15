@@ -3,21 +3,10 @@ name: reusable-deploy-vps-backend
 on:
   workflow_call:
     inputs:
-      app-dir:
-        description: Root app directory on VPS
-        required: false
+      app-name:
+        description: App name used for app dir (/root/<app-name>) and PM2 process name
+        required: true
         type: string
-        default: /root/wazada
-      backend-dir:
-        description: Backend app directory on VPS
-        required: false
-        type: string
-        default: /root/wazada/Backend
-      pm2-app-name:
-        description: PM2 app name
-        required: false
-        type: string
-        default: wazada-backend
       source:
         description: Files/folders to copy from repo
         required: false
@@ -37,9 +26,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      APP_DIR: ${{ inputs.app-dir }}
-      BACKEND_DIR: ${{ inputs.backend-dir }}
-      PM2_APP_NAME: ${{ inputs.pm2-app-name }}
+      APP_DIR: /root/${{ inputs.app-name }}
+      BACKEND_DIR: /root/${{ inputs.app-name }}/Backend
+      PM2_APP_NAME: ${{ inputs.app-name }}
 
     steps:
       - name: Checkout repository
@@ -53,6 +42,7 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             set -e
+            mkdir -p "${{ env.APP_DIR }}"
             mkdir -p "${{ env.BACKEND_DIR }}"
 
       - name: Copy backend files to VPS
@@ -92,6 +82,12 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             set -e
+
+            if ! command -v node >/dev/null 2>&1; then
+              echo "Node.js is not installed on VPS. Install Node.js first."
+              exit 1
+            fi
+
             if ! command -v pm2 >/dev/null 2>&1; then
               npm install -g pm2
             fi
@@ -103,10 +99,15 @@ jobs:
               npm install --omit=dev
             fi
 
-            cd "${{ env.APP_DIR }}"
             if pm2 describe "${{ env.PM2_APP_NAME }}" >/dev/null 2>&1; then
-              pm2 restart "${{ env.PM2_APP_NAME }}"
+              pm2 restart "${{ env.PM2_APP_NAME }}" --update-env
             else
-              pm2 start ecosystem.config.js --only "${{ env.PM2_APP_NAME }}"
+              if [ -f "${{ env.APP_DIR }}/ecosystem.config.js" ]; then
+                cd "${{ env.APP_DIR }}"
+                pm2 start ecosystem.config.js --only "${{ env.PM2_APP_NAME }}"
+              else
+                pm2 start server.js --name "${{ env.PM2_APP_NAME }}" --cwd "${{ env.BACKEND_DIR }}" --update-env
+              fi
             fi
             pm2 save
+            pm2 status

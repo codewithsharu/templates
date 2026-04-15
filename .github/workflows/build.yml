@@ -15,6 +15,10 @@ on:
         description: Name of the uploaded artifact
         type: string
         default: 'react-build'
+    secrets:
+      FRONTEND_ENV_FILE:
+        description: Full multiline frontend env file content written to .env.production during CI build
+        required: false
 
 jobs:
   build:
@@ -32,6 +36,11 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
+
+      - name: Inject frontend env file
+        if: ${{ secrets.FRONTEND_ENV_FILE != '' }}
+        run: |
+          printf "%s\n" "${{ secrets.FRONTEND_ENV_FILE }}" > .env.production
 
       - name: Install dependencies
         run: npm ci
